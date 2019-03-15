@@ -1,17 +1,18 @@
-use serde::Deserialize;
-use serde_derive::Deserialize;
+use chrono::{DateTime, FixedOffset};
 use reqwest::Client as Http;
 use reqwest::Response;
+use serde::Deserialize;
+use serde_derive::Deserialize;
 
-mod utils;
 mod error;
+mod utils;
 pub use error::Error;
 
-use utils::{url, Action, Region};
+use utils::{url, Account, Region};
 
-type Date = String;
 type Id = String;
 type Permission = String;
+type Date = DateTime<FixedOffset>;
 
 #[derive(Debug)]
 pub struct Client {
@@ -37,42 +38,42 @@ pub struct Roles {
 pub struct Token {
     creation_date: Date,
     expires: Option<Date>,
-    id: TokenId,
+    id: Option<TokenId>,
     inherits_user_perms: bool,
-    permissions: Vec<Permission>,
+    permissions: Option<Vec<Permission>>,
     roles: Roles,
     user_id: UserId,
 }
 
 impl Client {
     /// Login to the scaleway API with your tokens secret key.
-    /// 
+    ///
     /// You can create a new token in [Account -> Credentials](https://console.scaleway.com/account/credentials)
     pub fn from_token(token: &str) -> Result<Client, Error> {
         use reqwest::header::{self, HeaderMap};
         let mut headers = HeaderMap::new();
-        headers.insert(header::AUTHORIZATION, header::HeaderValue::from_str(token)?);
+        headers.insert(
+            header::HeaderName::from_static("x-auth-token"),
+            header::HeaderValue::from_str(token)?,
+        );
+        println!("headers: {:#?}", headers);
         Ok(Client {
-            http: reqwest::ClientBuilder::new().default_headers(headers).build()?
+            http: reqwest::ClientBuilder::new()
+                .default_headers(headers)
+                .build()?,
         })
     }
 
     pub fn tokens(&self) -> Result<Vec<Token>, Error> {
-        let response = self.http.get(url(Action::Account)).send()?;
-        Self::parse(response)?
-    }
-
-    pub(crate) fn parse<T: Deserialize>(response: Response) -> Result<T, Error> {
-        if response.status().is_success() {
-            response.json()?
-        } else {
-            Err(response.status())
+        #[derive(Deserialize)]
+        struct Inner {
+            tokens: Vec<Token>,
         }
+        return Ok(self
+            .http
+            .get(url(Account::Tokens))
+            .send()?
+            .json::<Inner>()?
+            .tokens);
     }
-}
-
-
-fn main() {
-    let c = Client::from_token("d0c1a638-e298-443f-82ec-25de4ff9e159").unwrap();
-    println!("{:#?}", c.tokens());
 }
