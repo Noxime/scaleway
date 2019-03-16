@@ -1,3 +1,4 @@
+use crate::ApiError;
 use reqwest::header::InvalidHeaderValue;
 use reqwest::Error as ReqwestError;
 use serde_json::Error as SerdeError;
@@ -8,6 +9,7 @@ pub enum Error {
     InvalidToken,
     Reqwest(ReqwestError),
     Serde(SerdeError),
+    Api(ApiError),
 }
 
 impl From<InvalidHeaderValue> for Error {
@@ -25,5 +27,11 @@ impl From<ReqwestError> for Error {
 impl From<SerdeError> for Error {
     fn from(e: SerdeError) -> Error {
         Error::Serde(e)
+    }
+}
+
+impl From<ApiError> for Error {
+    fn from(e: ApiError) -> Error {
+        Error::Api(e)
     }
 }

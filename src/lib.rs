@@ -1,14 +1,13 @@
 use chrono::{DateTime, FixedOffset};
-use reqwest::Client as Http;
-use reqwest::Response;
-use serde::Deserialize;
-use serde_derive::Deserialize;
+use reqwest::{header, Method, Response, Client as Http};
+use serde::{Deserialize, Serialize};
+use serde_derive::{Deserialize, Serialize};
 
 mod error;
 mod utils;
 pub use error::Error;
 
-use utils::{url, Account, Region};
+use utils::{url, Account, request, request_noret};
 
 pub trait TryFrom<T>
 where
@@ -17,17 +16,17 @@ where
     fn try_from(other: T) -> Option<Self>;
 }
 
-type Id = String;
-type Permission = String;
-type Date = DateTime<FixedOffset>;
-type Ip = std::net::IpAddr;
+pub type Id = String;
+pub type Permission = String;
+pub type Date = DateTime<FixedOffset>;
+pub type Ip = std::net::IpAddr;
 
 #[derive(Debug)]
 pub struct Client {
     http: Http,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct TokenId(Id);
 
 impl<T: Into<Id>> From<T> for TokenId {
@@ -36,6 +35,17 @@ impl<T: Into<Id>> From<T> for TokenId {
     }
 }
 
+// impl<T: Into<TokenId>> From<&T> for TokenId {
+//     fn from(id: &T) -> TokenId {
+//         unimplemented!()
+//     }
+// }
+
+// impl<T: Into<TokenId>> From<&T> for TokenId {
+//     fn from(id: &T) -> TokenId {
+//         TokenId(id.clone().into())
+//     }
+// }
 
 #[derive(Debug, Deserialize)]
 pub struct OrganizationId(Id);
@@ -73,6 +83,38 @@ pub struct Token {
     pub creation_date: Date,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ApiResponse<T> {
+    Success(T),
+    Error(ApiError),
+}
+
+impl<T> ApiResponse<T> {
+    fn into(self) -> Result<T, Error> {
+        match self {
+            ApiResponse::Success(v) => Ok(v),
+            ApiResponse::Error(e) => Err(Error::Api(e))
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiError {
+    fields: Option<std::collections::HashMap<String, Vec<String>>>,
+    message: String,
+    r#type: ApiErrorType,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiErrorType {
+    InvalidRequestError,
+    InvalidAuth,
+    AuthorizationRequired,
+    UnknownResource,
+}
+
 impl Client {
     /// Login to the scaleway API with your tokens secret key.
     ///
@@ -92,73 +134,71 @@ impl Client {
         })
     }
 
-    /// Authenticates a user against their email, password, and then returns a new Token, which can be used until it expires.
-    pub fn create_token(&self, email: impl Into<String>, password: impl Into<String>, expires: Option<Date>) -> Result<(TokenId, Token), Error> {
-        #[derive(Deserialize)]
-        struct Outer {
-            token: Inner,
+    /// Authenticates a user against their email, password, and then returns a new Token.
+    /// 
+    /// Note: Expires field determines if the created token is either Session or UserCreated token.
+    /// Session tokens expire after an hour (unless renewed), while UserCreated ones never expire.
+    pub fn create_token(
+        &self,
+        email: impl Into<String>,
+        password: impl Into<String>,
+        expires: bool,
+    ) -> Result<(TokenId, Token), Error> {
+        #[derive(Deserialize, Debug)]
+        struct O {
+            token: I,
         }
-        #[derive(Deserialize)]
-
-        struct Inner {
+        #[derive(Deserialize, Debug)]
+        struct I {
             id: TokenId,
             #[serde(flatten)]
             token: Token,
         }
-        let r = self
-            .http
-            .post(&url(Account::Tokens))
-            .json(&{
-                let mut m = std::collections::HashMap::new();
-                m.insert("email", email.into());
-                m.insert("password", password.into());
-                m
-            })
-            .send()?
-            .json::<Outer>()?.token;
-        Ok((r.id, r.token))
+        #[derive(Serialize)]
+        struct R {
+            email: String,
+            password: String,
+            expires: bool,
+        }
+        let I { id, token } = request::<R, O>(self, Method::POST, &url(Account::Tokens), Some(R {
+            email: email.into(),
+            password: password.into(),
+            expires,
+        }))?.token;
+        Ok((id, token))
     }
 
     /// List all Tokens associated with your account
     pub fn tokens(&self) -> Result<Vec<Token>, Error> {
         #[derive(Deserialize)]
-        struct Inner {
+        struct I {
             tokens: Vec<Token>,
         }
-        // the wrath of serenitycord
-        Ok(self
-            .http
-            .get(&url(Account::Tokens))
-            .send()?
-            .json::<Inner>()?
-            .tokens)
+        Ok(request::<(), I>(self, Method::GET, &url(Account::Tokens), None)?.tokens)
     }
 
     /// List an individual Token
-    pub fn token(&self, id: impl Into<TokenId>) -> Result<Token, Error> {
+    pub fn token<Id: Clone + Into<TokenId>>(&self, id: &Id) -> Result<Token, Error> {
         #[derive(Deserialize)]
-        struct Inner {
+        struct I {
             token: Token,
         }
-        Ok(self
-            .http
-            .get(&url(Account::Token(id.into())))
-            .send()?
-            .json::<Inner>()?
-            .token)
+        Ok(request::<(), I>(self, Method::GET, &url(Account::Token(id.clone().into())), None)?.token)
     }
 
     /// Increase Token expiration time of 30 minutes
-    pub fn renew_token(&self, id: impl Into<TokenId>) -> Result<Token, Error> {
+    /// 
+    /// Errors: This errors out if token does not have an expiration date set
+    pub fn renew_token<Id: Clone + Into<TokenId>>(&self, id: &Id) -> Result<Token, Error> {
         #[derive(Deserialize)]
-        struct Inner {
+        struct I {
             token: Token,
         }
-        Ok(self
-            .http
-            .patch(&url(Account::Token(id.into())))
-            .send()?
-            .json::<Inner>()?
-            .token)
+        Ok(request::<(), I>(self, Method::PATCH, &url(Account::Token(id.clone().into())), None)?.token)
+    }
+
+    /// Delete an individual token
+    pub fn delete_token<Id: Clone + Into<TokenId>>(&self, id: &Id) -> Result<(), Error> {
+        request_noret::<()>(self, Method::DELETE, &url(Account::Token(id.clone().into())), None)
     }
 }
