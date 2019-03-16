@@ -1,3 +1,5 @@
+use crate::TokenId;
+
 #[derive(Debug)]
 pub(crate) enum Endpoint {
     Account(Account),
@@ -25,12 +27,16 @@ pub(crate) enum Region {
 #[derive(Debug)]
 pub(crate) enum Account {
     Tokens,
+    Token(TokenId),
 }
 
-pub(crate) fn url(action: impl Into<Endpoint>) -> &'static str {
+pub(crate) fn url(action: impl Into<Endpoint>) -> String {
     match action.into() {
-        Endpoint::Account(Account::Tokens) => "https://account.scaleway.com/tokens",
-        Endpoint::Compute(Region::Par1) => "https://cp-par1.scaleway.com/",
-        Endpoint::Compute(Region::Ams1) => "https://cp-ams1.scaleway.com/",
+        Endpoint::Account(Account::Tokens) => String::from("https://account.scaleway.com/tokens"),
+        Endpoint::Account(Account::Token(id)) => {
+            format!("https://account.scaleway.com/tokens/{}", id.0)
+        }
+        Endpoint::Compute(Region::Par1) => String::from("https://cp-par1.scaleway.com/"),
+        Endpoint::Compute(Region::Ams1) => String::from("https://cp-ams1.scaleway.com/"),
     }
 }
