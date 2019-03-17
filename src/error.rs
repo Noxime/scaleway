@@ -1,7 +1,7 @@
-use crate::ApiError;
 use reqwest::header::InvalidHeaderValue;
 use reqwest::Error as ReqwestError;
 use serde_json::Error as SerdeError;
+use serde_derive::Deserialize;
 
 #[derive(Debug)]
 pub enum Error {
@@ -10,6 +10,22 @@ pub enum Error {
     Reqwest(ReqwestError),
     Serde(SerdeError),
     Api(ApiError),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiError {
+    fields: Option<std::collections::HashMap<String, Vec<String>>>,
+    message: String,
+    r#type: ApiErrorType,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiErrorType {
+    InvalidRequestError,
+    InvalidAuth,
+    AuthorizationRequired,
+    UnknownResource,
 }
 
 impl From<InvalidHeaderValue> for Error {

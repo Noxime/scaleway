@@ -1,9 +1,9 @@
-use crate::{TokenId, Serialize, Deserialize, Client, Method, Error, ApiResponse, header};
+use crate::{TokenId, Serialize, Deserialize, Client, Method, error::ApiError, Error, header, UserId};
 
 #[derive(Debug)]
 pub(crate) enum Endpoint {
     Account(Account),
-    Compute(Region),
+    Compute(Region, Compute),
 }
 
 impl From<Account> for Endpoint {
@@ -12,14 +12,14 @@ impl From<Account> for Endpoint {
     }
 }
 
-impl From<Region> for Endpoint {
-    fn from(region: Region) -> Endpoint {
-        Endpoint::Compute(region)
+impl From<(Region, Compute)> for Endpoint {
+    fn from((region, compute): (Region, Compute)) -> Endpoint {
+        Endpoint::Compute(region, compute)
     }
 }
 
 #[derive(Debug)]
-pub(crate) enum Region {
+pub enum Region {
     Par1,
     Ams1,
 }
@@ -28,6 +28,13 @@ pub(crate) enum Region {
 pub(crate) enum Account {
     Tokens,
     Token(TokenId),
+    Organizations,
+    Users(UserId),
+}
+
+#[derive(Debug)]
+pub(crate) enum Compute {
+    Servers
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -47,13 +54,35 @@ impl Into<()> for NilType {
 pub(crate) fn url(action: impl Into<Endpoint>) -> String {
     match action.into() {
         Endpoint::Account(Account::Tokens) => String::from("https://account.scaleway.com/tokens"),
-        Endpoint::Account(Account::Token(id)) => {
-            format!("https://account.scaleway.com/tokens/{}", id.0)
-        }
-        Endpoint::Compute(Region::Par1) => String::from("https://cp-par1.scaleway.com/"),
-        Endpoint::Compute(Region::Ams1) => String::from("https://cp-ams1.scaleway.com/"),
+        Endpoint::Account(Account::Token(id)) => format!("https://account.scaleway.com/tokens/{}", id.0),
+        Endpoint::Account(Account::Organizations) => String::from("https://account.scaleway.com/organizations"),
+        Endpoint::Account(Account::Users(id)) => format!("https://account.scaleway.com/users/{}", id.0),
+        Endpoint::Compute(region, v) => format!("https://cp-{}.scaleway.com/{}", match region {
+            Region::Par1 => "par1",
+            Region::Ams1 => "ams1",
+        }, match v {
+            Compute::Servers => "servers"
+        }),
     }
 }
+
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ApiResponse<T> {
+    Success(T),
+    Error(ApiError),
+}
+
+impl<T> ApiResponse<T> {
+    fn into(self) -> Result<T, Error> {
+        match self {
+            ApiResponse::Success(v) => Ok(v),
+            ApiResponse::Error(e) => Err(Error::Api(e))
+        }
+    }
+}
+
 
 pub(crate) fn request<S, D>(
         client: &Client,
@@ -71,7 +100,10 @@ pub(crate) fn request<S, D>(
     if let Some(body) = body {
         request = request.json(&body);
     }
-    Ok(request.send()?.json::<ApiResponse<D>>()?.into()?)
+    println!("request: {:#?}", request);
+    let mut response = request.send()?;
+    println!("reponse: {:#?}", response);
+    Ok(response.json::<ApiResponse<D>>()?.into()?)
 }
 
 // TODO: I don't like having this second function, do something about it.
